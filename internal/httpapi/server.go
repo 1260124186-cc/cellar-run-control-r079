@@ -8,6 +8,7 @@ import (
 
 func NewHandler(app *service.Service) http.Handler {
 	mux := http.NewServeMux()
+	registerSiteRoutes(mux, app)
 	registerFormulaRoutes(mux, app)
 	registerVesselRoutes(mux, app)
 	registerRunRoutes(mux, app)

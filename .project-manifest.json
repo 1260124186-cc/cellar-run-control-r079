@@ -50,14 +50,15 @@
       "resource_lifecycle",
       "error_propagation",
       "concurrency",
-      "validation_boundary"
+      "validation_boundary",
+      "namespace_isolation"
     ]
   },
   "workflows": [
     {
       "id": "formula-approval",
       "name": "Create, configure, approve, and read a formula",
-      "entry": "POST /v1/formulas",
+      "entry": "POST /v1/sites/{site}/formulas",
       "steps": [
         "create a draft formula with validated target values",
         "set the process step list in one operation",
@@ -77,7 +78,7 @@
     {
       "id": "vessel-run-lifecycle",
       "name": "Register a vessel and advance a reserved run to fermentation",
-      "entry": "POST /v1/vessels",
+      "entry": "POST /v1/sites/{site}/vessels",
       "steps": [
         "register an available vessel",
         "create a planned run against an approved formula",
@@ -97,7 +98,7 @@
     {
       "id": "observations-completion",
       "name": "Append observations, start conditioning, and complete a run",
-      "entry": "POST /v1/runs/{id}/observations",
+      "entry": "POST /v1/sites/{site}/runs/{id}/observations",
       "steps": [
         "append ordered gravity and temperature observations",
         "move the run to conditioning",
@@ -107,6 +108,26 @@
       "success": "returns computed metrics and a vessel in cleaning state",
       "failure": "returns a stable range, sequence, time, state, or count error",
       "verification": "the check issues real HTTP requests and rejects malformed observations",
+      "module_ids": [
+        "httpapi",
+        "service",
+        "domain",
+        "storage"
+      ]
+    },
+    {
+      "id": "site-isolation",
+      "name": "Keep formulas, vessels, and runs isolated per cellar site",
+      "entry": "POST /v1/sites",
+      "steps": [
+        "create two sites and reuse the same formula, vessel, and run codes in both",
+        "reject cross-site detail reads, run creation, and vessel reservation",
+        "archive one site and reject new writes while keeping reads available",
+        "restart the service and confirm every run remains in its original site"
+      ],
+      "success": "identical codes coexist per site and survive a restart without leaking",
+      "failure": "returns a stable site, not-found, or archived-site error without partial writes",
+      "verification": "the check issues real HTTP requests against two sites, archives one, and reopens the snapshot",
       "module_ids": [
         "httpapi",
         "service",

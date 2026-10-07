@@ -3,11 +3,17 @@ package workflowcheck
 import "github.com/1260124186-cc/solo-0016-cellar-run-control/internal/domain"
 
 func vesselRunLifecycle(api *client) error {
-	formula, err := ensureApprovedFormula(api, "Lifecycle Formula")
+	site, err := ensureSite(api, "MAIN", "Main Cellar")
 	if err != nil {
 		return err
 	}
-	vesselResponse, err := api.call("POST", "/v1/vessels", map[string]any{
+	scoped := api.scoped("/v1/sites/" + site.ID)
+
+	formula, err := ensureApprovedFormula(scoped, "Lifecycle Formula")
+	if err != nil {
+		return err
+	}
+	vesselResponse, err := scoped.call("POST", "/vessels", map[string]any{
 		"code":            "VSL-101",
 		"capacity_liters": 240.0,
 	}, nil)
@@ -22,7 +28,7 @@ func vesselRunLifecycle(api *client) error {
 		return err
 	}
 
-	firstResponse, err := api.call("POST", "/v1/runs",
+	firstResponse, err := scoped.call("POST", "/runs",
 		createRunPayload("RUN-LIFECYCLE-A", formula.ID), nil)
 	if err != nil {
 		return err
@@ -35,7 +41,7 @@ func vesselRunLifecycle(api *client) error {
 		return err
 	}
 
-	secondResponse, err := api.call("POST", "/v1/runs",
+	secondResponse, err := scoped.call("POST", "/runs",
 		createRunPayload("RUN-LIFECYCLE-B", formula.ID), nil)
 	if err != nil {
 		return err
@@ -48,7 +54,7 @@ func vesselRunLifecycle(api *client) error {
 		return err
 	}
 
-	reservedResponse, err := api.call("POST", "/v1/runs/"+first.ID+"/reserve",
+	reservedResponse, err := scoped.call("POST", "/runs/"+first.ID+"/reserve",
 		map[string]any{"vessel_id": vessel.ID}, ptrInt64(1))
 	if err != nil {
 		return err
@@ -67,7 +73,7 @@ func vesselRunLifecycle(api *client) error {
 		return err
 	}
 
-	conflictResponse, err := api.call("POST", "/v1/runs/"+second.ID+"/reserve",
+	conflictResponse, err := scoped.call("POST", "/runs/"+second.ID+"/reserve",
 		map[string]any{"vessel_id": vessel.ID}, ptrInt64(1))
 	if err != nil {
 		return err
@@ -77,7 +83,7 @@ func vesselRunLifecycle(api *client) error {
 		return err
 	}
 
-	startResponse, err := api.call("POST", "/v1/runs/"+first.ID+"/start",
+	startResponse, err := scoped.call("POST", "/runs/"+first.ID+"/start",
 		nil, ptrInt64(2))
 	if err != nil {
 		return err
@@ -98,7 +104,7 @@ func vesselRunLifecycle(api *client) error {
 		return errInvalidWorkflow("run did not retain its reserved vessel")
 	}
 
-	readResponse, err := api.call("GET", "/v1/runs/"+first.ID, nil, nil)
+	readResponse, err := scoped.call("GET", "/runs/"+first.ID, nil, nil)
 	if err != nil {
 		return err
 	}

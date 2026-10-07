@@ -11,37 +11,71 @@ import (
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/storage"
 )
 
-func Run(name string) error {
+// harness owns the temporary snapshot directory and the running check server
+// so a workflow check can restart the service against the same data.
+type harness struct {
+	dataDir string
+	server  *httptest.Server
+	api     *client
+}
+
+func newHarness() (*harness, error) {
 	dataDir, err := os.MkdirTemp("", "cellar-run-check-*")
 	if err != nil {
-		return fmt.Errorf("create check directory: %w", err)
+		return nil, fmt.Errorf("create check directory: %w", err)
 	}
-	defer os.RemoveAll(dataDir)
+	h := &harness{dataDir: dataDir}
+	if err := h.restart(); err != nil {
+		_ = os.RemoveAll(dataDir)
+		return nil, err
+	}
+	return h, nil
+}
 
-	store, err := storage.Open(dataDir)
+// restart closes the current server (if any) and reopens the snapshot from
+// disk, simulating a full service restart against the same data directory.
+func (h *harness) restart() error {
+	if h.server != nil {
+		h.server.Close()
+	}
+	store, err := storage.Open(h.dataDir)
 	if err != nil {
 		return err
 	}
 	app := service.New(store, clock.System{})
-	server := httptest.NewServer(httpapi.NewHandler(app))
-	defer server.Close()
-	api := newClient(server.URL)
+	h.server = httptest.NewServer(httpapi.NewHandler(app))
+	h.api = newClient(h.server.URL)
+	return nil
+}
+
+func (h *harness) close() {
+	if h.server != nil {
+		h.server.Close()
+	}
+	_ = os.RemoveAll(h.dataDir)
+}
+
+func Run(name string) error {
+	h, err := newHarness()
+	if err != nil {
+		return err
+	}
+	defer h.close()
 
 	switch name {
 	case "formula-approval":
-		if err := formulaApproval(api); err != nil {
-			return err
-		}
+		err = formulaApproval(h.api)
 	case "vessel-run-lifecycle":
-		if err := vesselRunLifecycle(api); err != nil {
-			return err
-		}
+		err = vesselRunLifecycle(h.api)
 	case "observations-completion":
-		if err := observationsCompletion(api); err != nil {
-			return err
-		}
+		err = observationsCompletion(h.api)
+	case "site-isolation":
+		err = siteIsolation(h)
 	default:
 		return fmt.Errorf("unknown workflow check %q", name)
+	}
+	if err != nil {
+		return err
 	}
 	fmt.Printf("workflow check passed: %s\n", name)
 	return nil

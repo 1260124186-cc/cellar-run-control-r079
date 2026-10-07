@@ -32,6 +32,32 @@ func (s *Service) checkExpected(current int64, expected *int64) error {
 	return nil
 }
 
+// requireSite resolves the namespace for a read operation. Archived sites
+// remain readable so historical runs stay visible in their original space.
+func requireSite(snapshot domain.Snapshot, siteID string) (domain.Site, error) {
+	site, ok := snapshot.Sites[siteID]
+	if !ok {
+		return domain.Site{}, domain.NewError(domain.CodeSiteNotFound, "site was not found")
+	}
+	return site, nil
+}
+
+// requireWritableSite resolves the namespace for a write operation. It runs
+// inside the same locked transaction as the mutation, so a concurrent site
+// archival either wins (and the write fails) or loses (and the write
+// commits) without producing partial cross-site state.
+func requireWritableSite(snapshot *domain.Snapshot, siteID string) (domain.Site, error) {
+	site, err := requireSite(*snapshot, siteID)
+	if err != nil {
+		return domain.Site{}, err
+	}
+	if site.State != domain.SiteActive {
+		return domain.Site{}, domain.NewError(domain.CodeSiteArchived,
+			"site is archived and no longer accepts writes")
+	}
+	return site, nil
+}
+
 func generateEntityID(prefix string) (string, error) {
 	return domain.NewID(prefix)
 }

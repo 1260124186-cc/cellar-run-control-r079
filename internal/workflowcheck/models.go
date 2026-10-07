@@ -7,8 +7,16 @@ import (
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/domain"
 )
 
+type siteView struct {
+	ID      string           `json:"id"`
+	Code    string           `json:"code"`
+	State   domain.SiteState `json:"state"`
+	Version int64            `json:"version"`
+}
+
 type formulaView struct {
 	ID      string               `json:"id"`
+	SiteID  string               `json:"site_id"`
 	State   domain.FormulaState  `json:"state"`
 	Version int64                `json:"version"`
 	Steps   []domain.FormulaStep `json:"steps"`
@@ -16,6 +24,7 @@ type formulaView struct {
 
 type vesselView struct {
 	ID          string             `json:"id"`
+	SiteID      string             `json:"site_id"`
 	State       domain.VesselState `json:"state"`
 	Version     int64              `json:"version"`
 	ActiveRunID *string            `json:"active_run_id"`
@@ -23,6 +32,9 @@ type vesselView struct {
 
 type runView struct {
 	ID           string                      `json:"id"`
+	SiteID       string                      `json:"site_id"`
+	Code         string                      `json:"code"`
+	FormulaID    string                      `json:"formula_id"`
 	State        domain.RunState             `json:"state"`
 	Version      int64                       `json:"version"`
 	VesselID     *string                     `json:"vessel_id"`
@@ -33,6 +45,43 @@ type runView struct {
 type pairView struct {
 	Run    runView    `json:"run"`
 	Vessel vesselView `json:"vessel"`
+}
+
+type siteListView struct {
+	Sites []siteView `json:"sites"`
+}
+
+type formulaListView struct {
+	Formulas []formulaView `json:"formulas"`
+}
+
+type vesselListView struct {
+	Vessels []vesselView `json:"vessels"`
+}
+
+type runListView struct {
+	Runs []runView `json:"runs"`
+}
+
+func ensureSite(api *client, code, name string) (siteView, error) {
+	response, err := api.call("POST", "/v1/sites", map[string]any{
+		"code": code,
+		"name": name,
+	}, nil)
+	if err != nil {
+		return siteView{}, err
+	}
+	if err := requireStatus(response, 201, "create site"); err != nil {
+		return siteView{}, err
+	}
+	var site siteView
+	if err := response.decode(&site); err != nil {
+		return siteView{}, err
+	}
+	if site.State != domain.SiteActive || site.Version != 1 {
+		return siteView{}, errInvalidWorkflow("created site has unexpected state or version")
+	}
+	return site, nil
 }
 
 func createFormulaPayload(name string) map[string]any {

@@ -6,6 +6,11 @@ import (
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/domain"
 )
 
+type CreateSiteInput struct {
+	Code string
+	Name string
+}
+
 type CreateFormulaInput struct {
 	Name                  string
 	Style                 string

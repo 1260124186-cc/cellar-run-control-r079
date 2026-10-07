@@ -7,7 +7,13 @@ import (
 )
 
 func formulaApproval(api *client) error {
-	createdResponse, err := api.call("POST", "/v1/formulas",
+	site, err := ensureSite(api, "MAIN", "Main Cellar")
+	if err != nil {
+		return err
+	}
+	scoped := api.scoped("/v1/sites/" + site.ID)
+
+	createdResponse, err := scoped.call("POST", "/formulas",
 		createFormulaPayload("Current Pale"), nil)
 	if err != nil {
 		return err
@@ -23,7 +29,7 @@ func formulaApproval(api *client) error {
 		return fmt.Errorf("created formula has unexpected state or version")
 	}
 
-	premature, err := api.call("POST", "/v1/formulas/"+formula.ID+"/approve", nil, ptrInt64(1))
+	premature, err := scoped.call("POST", "/formulas/"+formula.ID+"/approve", nil, ptrInt64(1))
 	if err != nil {
 		return err
 	}
@@ -32,7 +38,7 @@ func formulaApproval(api *client) error {
 		return err
 	}
 
-	updatedResponse, err := api.call("PUT", "/v1/formulas/"+formula.ID+"/steps",
+	updatedResponse, err := scoped.call("PUT", "/formulas/"+formula.ID+"/steps",
 		formulaStepPayload(), ptrInt64(1))
 	if err != nil {
 		return err
@@ -47,7 +53,7 @@ func formulaApproval(api *client) error {
 		return fmt.Errorf("formula steps were not accepted as one revision")
 	}
 
-	duplicate, err := api.call("POST", "/v1/formulas",
+	duplicate, err := scoped.call("POST", "/formulas",
 		createFormulaPayload("  current   pale  "), nil)
 	if err != nil {
 		return err
@@ -57,7 +63,7 @@ func formulaApproval(api *client) error {
 		return err
 	}
 
-	approvedResponse, err := api.call("POST", "/v1/formulas/"+formula.ID+"/approve", nil, ptrInt64(2))
+	approvedResponse, err := scoped.call("POST", "/formulas/"+formula.ID+"/approve", nil, ptrInt64(2))
 	if err != nil {
 		return err
 	}
@@ -71,7 +77,7 @@ func formulaApproval(api *client) error {
 		return fmt.Errorf("approved formula has unexpected state or version")
 	}
 
-	readResponse, err := api.call("GET", "/v1/formulas/"+formula.ID, nil, nil)
+	readResponse, err := scoped.call("GET", "/formulas/"+formula.ID, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -86,7 +92,7 @@ func formulaApproval(api *client) error {
 		return fmt.Errorf("approved formula was not readable")
 	}
 
-	repeated, err := api.call("POST", "/v1/formulas/"+formula.ID+"/approve", nil, ptrInt64(3))
+	repeated, err := scoped.call("POST", "/formulas/"+formula.ID+"/approve", nil, ptrInt64(3))
 	if err != nil {
 		return err
 	}
@@ -97,8 +103,10 @@ func formulaApproval(api *client) error {
 	return nil
 }
 
-func ensureApprovedFormula(api *client, name string) (formulaView, error) {
-	createdResponse, err := api.call("POST", "/v1/formulas", createFormulaPayload(name), nil)
+// ensureApprovedFormula creates and approves a formula through the given
+// site-scoped client.
+func ensureApprovedFormula(scoped *client, name string) (formulaView, error) {
+	createdResponse, err := scoped.call("POST", "/formulas", createFormulaPayload(name), nil)
 	if err != nil {
 		return formulaView{}, err
 	}
@@ -109,7 +117,7 @@ func ensureApprovedFormula(api *client, name string) (formulaView, error) {
 	if err := createdResponse.decode(&formula); err != nil {
 		return formulaView{}, err
 	}
-	stepsResponse, err := api.call("PUT", "/v1/formulas/"+formula.ID+"/steps",
+	stepsResponse, err := scoped.call("PUT", "/formulas/"+formula.ID+"/steps",
 		formulaStepPayload(), ptrInt64(1))
 	if err != nil {
 		return formulaView{}, err
@@ -117,7 +125,7 @@ func ensureApprovedFormula(api *client, name string) (formulaView, error) {
 	if err := requireStatus(stepsResponse, 200, "set setup steps"); err != nil {
 		return formulaView{}, err
 	}
-	approveResponse, err := api.call("POST", "/v1/formulas/"+formula.ID+"/approve",
+	approveResponse, err := scoped.call("POST", "/formulas/"+formula.ID+"/approve",
 		nil, ptrInt64(2))
 	if err != nil {
 		return formulaView{}, err

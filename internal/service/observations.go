@@ -3,13 +3,17 @@ package service
 import "github.com/1260124186-cc/solo-0016-cellar-run-control/internal/domain"
 
 func (s *Service) AppendObservation(
+	siteID string,
 	id string,
 	input ObservationInput,
 ) (domain.FermentationRun, error) {
 	var updated domain.FermentationRun
 	err := s.store.Execute(func(snapshot *domain.Snapshot) error {
+		if _, err := requireWritableSite(snapshot, siteID); err != nil {
+			return err
+		}
 		run, ok := snapshot.Runs[id]
-		if !ok {
+		if !ok || run.SiteID != siteID {
 			return domain.NewError(domain.CodeRunNotFound, "run was not found")
 		}
 		now := s.clock.Now()
@@ -36,13 +40,17 @@ func (s *Service) AppendObservation(
 }
 
 func (s *Service) BeginConditioning(
+	siteID string,
 	id string,
 	input VersionInput,
 ) (domain.FermentationRun, error) {
 	var updated domain.FermentationRun
 	err := s.store.Execute(func(snapshot *domain.Snapshot) error {
+		if _, err := requireWritableSite(snapshot, siteID); err != nil {
+			return err
+		}
 		run, ok := snapshot.Runs[id]
-		if !ok {
+		if !ok || run.SiteID != siteID {
 			return domain.NewError(domain.CodeRunNotFound, "run was not found")
 		}
 		if err := s.checkExpected(run.Version, input.ExpectedVersion); err != nil {
@@ -62,21 +70,25 @@ func (s *Service) BeginConditioning(
 }
 
 func (s *Service) CompleteRun(
+	siteID string,
 	id string,
 	input VersionInput,
 ) (domain.FermentationRun, domain.Vessel, error) {
 	var updatedRun domain.FermentationRun
 	var updatedVessel domain.Vessel
 	err := s.store.Execute(func(snapshot *domain.Snapshot) error {
+		if _, err := requireWritableSite(snapshot, siteID); err != nil {
+			return err
+		}
 		run, ok := snapshot.Runs[id]
-		if !ok {
+		if !ok || run.SiteID != siteID {
 			return domain.NewError(domain.CodeRunNotFound, "run was not found")
 		}
 		if err := s.checkExpected(run.Version, input.ExpectedVersion); err != nil {
 			return err
 		}
 		formula, ok := snapshot.Formulas[run.FormulaID]
-		if !ok {
+		if !ok || formula.SiteID != siteID {
 			return domain.NewError(domain.CodeFormulaNotFound, "attached formula was not found")
 		}
 		if err := run.Complete(formula.TargetOriginalGravity, s.clock.Now()); err != nil {
@@ -86,7 +98,7 @@ func (s *Service) CompleteRun(
 			return domain.NewError(domain.CodeRunState, "run has no vessel")
 		}
 		vessel, ok := snapshot.Vessels[*run.VesselID]
-		if !ok {
+		if !ok || vessel.SiteID != siteID {
 			return domain.NewError(domain.CodeVesselNotFound, "vessel was not found")
 		}
 		if err := vessel.StartCleaning(run.ID, s.clock.Now()); err != nil {

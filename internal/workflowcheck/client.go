@@ -29,6 +29,12 @@ func newClient(baseURL string) *client {
 	}
 }
 
+// scoped returns a client that prefixes every request path with the given
+// site namespace, e.g. /v1/sites/site_abc.
+func (c *client) scoped(prefix string) *client {
+	return &client{baseURL: c.baseURL + prefix, http: c.http}
+}
+
 func (c *client) call(
 	method string,
 	path string,

@@ -7,9 +7,13 @@ import (
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/domain"
 )
 
-func (s *Service) CreateFormula(input CreateFormulaInput) (domain.Formula, error) {
+func (s *Service) CreateFormula(
+	siteID string,
+	input CreateFormulaInput,
+) (domain.Formula, error) {
 	now := s.clock.Now()
 	formula := domain.Formula{
+		SiteID:                siteID,
 		Name:                  input.Name,
 		Style:                 input.Style,
 		TargetOriginalGravity: input.TargetOriginalGravity,
@@ -32,12 +36,15 @@ func (s *Service) CreateFormula(input CreateFormulaInput) (domain.Formula, error
 		return domain.Formula{}, domain.NewError(domain.CodeStorage, err.Error())
 	}
 	formula.ID = id
-	nameKey := domain.NameKey(formula.Name)
+	nameKey := domain.ScopedIndexKey(siteID, domain.NameKey(formula.Name))
 
 	err = s.store.Execute(func(snapshot *domain.Snapshot) error {
+		if _, err := requireWritableSite(snapshot, siteID); err != nil {
+			return err
+		}
 		if _, exists := snapshot.NameIndex[nameKey]; exists {
 			return domain.NewError(domain.CodeFormulaNameConflict,
-				"a formula with the same normalized name already exists")
+				"a formula with the same normalized name already exists in this site")
 		}
 		snapshot.Formulas[formula.ID] = formula
 		snapshot.NameIndex[nameKey] = formula.ID
@@ -50,13 +57,17 @@ func (s *Service) CreateFormula(input CreateFormulaInput) (domain.Formula, error
 }
 
 func (s *Service) SetFormulaSteps(
+	siteID string,
 	id string,
 	input SetFormulaStepsInput,
 ) (domain.Formula, error) {
 	var updated domain.Formula
 	err := s.store.Execute(func(snapshot *domain.Snapshot) error {
+		if _, err := requireWritableSite(snapshot, siteID); err != nil {
+			return err
+		}
 		formula, ok := snapshot.Formulas[id]
-		if !ok {
+		if !ok || formula.SiteID != siteID {
 			return domain.NewError(domain.CodeFormulaNotFound, "formula was not found")
 		}
 		if err := s.checkExpected(formula.Version, input.ExpectedVersion); err != nil {
@@ -76,11 +87,18 @@ func (s *Service) SetFormulaSteps(
 	return updated, nil
 }
 
-func (s *Service) ApproveFormula(id string, input VersionInput) (domain.Formula, error) {
+func (s *Service) ApproveFormula(
+	siteID string,
+	id string,
+	input VersionInput,
+) (domain.Formula, error) {
 	var updated domain.Formula
 	err := s.store.Execute(func(snapshot *domain.Snapshot) error {
+		if _, err := requireWritableSite(snapshot, siteID); err != nil {
+			return err
+		}
 		formula, ok := snapshot.Formulas[id]
-		if !ok {
+		if !ok || formula.SiteID != siteID {
 			return domain.NewError(domain.CodeFormulaNotFound, "formula was not found")
 		}
 		if err := s.checkExpected(formula.Version, input.ExpectedVersion); err != nil {
@@ -99,11 +117,18 @@ func (s *Service) ApproveFormula(id string, input VersionInput) (domain.Formula,
 	return updated, nil
 }
 
-func (s *Service) RetireFormula(id string, input VersionInput) (domain.Formula, error) {
+func (s *Service) RetireFormula(
+	siteID string,
+	id string,
+	input VersionInput,
+) (domain.Formula, error) {
 	var updated domain.Formula
 	err := s.store.Execute(func(snapshot *domain.Snapshot) error {
+		if _, err := requireWritableSite(snapshot, siteID); err != nil {
+			return err
+		}
 		formula, ok := snapshot.Formulas[id]
-		if !ok {
+		if !ok || formula.SiteID != siteID {
 			return domain.NewError(domain.CodeFormulaNotFound, "formula was not found")
 		}
 		if err := s.checkExpected(formula.Version, input.ExpectedVersion); err != nil {
@@ -129,11 +154,14 @@ func (s *Service) RetireFormula(id string, input VersionInput) (domain.Formula, 
 	return updated, nil
 }
 
-func (s *Service) GetFormula(id string) (domain.Formula, error) {
+func (s *Service) GetFormula(siteID, id string) (domain.Formula, error) {
 	var found domain.Formula
 	err := s.store.View(func(snapshot domain.Snapshot) error {
+		if _, err := requireSite(snapshot, siteID); err != nil {
+			return err
+		}
 		formula, ok := snapshot.Formulas[id]
-		if !ok {
+		if !ok || formula.SiteID != siteID {
 			return domain.NewError(domain.CodeFormulaNotFound, "formula was not found")
 		}
 		found = formula.Clone()
@@ -145,11 +173,17 @@ func (s *Service) GetFormula(id string) (domain.Formula, error) {
 	return found, nil
 }
 
-func (s *Service) ListFormulas() ([]domain.Formula, error) {
+func (s *Service) ListFormulas(siteID string) ([]domain.Formula, error) {
 	var formulas []domain.Formula
 	err := s.store.View(func(snapshot domain.Snapshot) error {
+		if _, err := requireSite(snapshot, siteID); err != nil {
+			return err
+		}
 		formulas = make([]domain.Formula, 0, len(snapshot.Formulas))
 		for _, formula := range snapshot.Formulas {
+			if formula.SiteID != siteID {
+				continue
+			}
 			formulas = append(formulas, formula.Clone())
 		}
 		return nil

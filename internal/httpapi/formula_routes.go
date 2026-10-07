@@ -22,12 +22,12 @@ type setStepsRequest struct {
 }
 
 func registerFormulaRoutes(mux *http.ServeMux, app *service.Service) {
-	mux.HandleFunc("POST /v1/formulas", func(response http.ResponseWriter, request *http.Request) {
+	mux.HandleFunc("POST /v1/sites/{site}/formulas", func(response http.ResponseWriter, request *http.Request) {
 		body, err := decodeJSON[createFormulaRequest](response, request)
 		if !handleDecode(response, err) {
 			return
 		}
-		formula, err := app.CreateFormula(service.CreateFormulaInput{
+		formula, err := app.CreateFormula(request.PathValue("site"), service.CreateFormulaInput{
 			Name:                  body.Name,
 			Style:                 body.Style,
 			TargetOriginalGravity: body.TargetOriginalGravity,
@@ -43,8 +43,8 @@ func registerFormulaRoutes(mux *http.ServeMux, app *service.Service) {
 		writeJSON(response, http.StatusCreated, formula)
 	})
 
-	mux.HandleFunc("GET /v1/formulas", func(response http.ResponseWriter, _ *http.Request) {
-		formulas, err := app.ListFormulas()
+	mux.HandleFunc("GET /v1/sites/{site}/formulas", func(response http.ResponseWriter, request *http.Request) {
+		formulas, err := app.ListFormulas(request.PathValue("site"))
 		if err != nil {
 			writeDomainError(response, err)
 			return
@@ -52,8 +52,8 @@ func registerFormulaRoutes(mux *http.ServeMux, app *service.Service) {
 		writeJSON(response, http.StatusOK, map[string]any{"formulas": formulas})
 	})
 
-	mux.HandleFunc("GET /v1/formulas/{id}", func(response http.ResponseWriter, request *http.Request) {
-		formula, err := app.GetFormula(request.PathValue("id"))
+	mux.HandleFunc("GET /v1/sites/{site}/formulas/{id}", func(response http.ResponseWriter, request *http.Request) {
+		formula, err := app.GetFormula(request.PathValue("site"), request.PathValue("id"))
 		if err != nil {
 			writeDomainError(response, err)
 			return
@@ -61,7 +61,7 @@ func registerFormulaRoutes(mux *http.ServeMux, app *service.Service) {
 		writeJSON(response, http.StatusOK, formula)
 	})
 
-	mux.HandleFunc("PUT /v1/formulas/{id}/steps", func(response http.ResponseWriter, request *http.Request) {
+	mux.HandleFunc("PUT /v1/sites/{site}/formulas/{id}/steps", func(response http.ResponseWriter, request *http.Request) {
 		body, err := decodeJSON[setStepsRequest](response, request)
 		if !handleDecode(response, err) {
 			return
@@ -70,7 +70,7 @@ func registerFormulaRoutes(mux *http.ServeMux, app *service.Service) {
 		if !handleDecode(response, err) {
 			return
 		}
-		formula, err := app.SetFormulaSteps(request.PathValue("id"),
+		formula, err := app.SetFormulaSteps(request.PathValue("site"), request.PathValue("id"),
 			service.SetFormulaStepsInput{ExpectedVersion: expected, Steps: body.Steps})
 		if err != nil {
 			writeDomainError(response, err)
@@ -79,12 +79,12 @@ func registerFormulaRoutes(mux *http.ServeMux, app *service.Service) {
 		writeJSON(response, http.StatusOK, formula)
 	})
 
-	mux.HandleFunc("POST /v1/formulas/{id}/approve", func(response http.ResponseWriter, request *http.Request) {
+	mux.HandleFunc("POST /v1/sites/{site}/formulas/{id}/approve", func(response http.ResponseWriter, request *http.Request) {
 		expected, err := expectedVersion(request)
 		if !handleDecode(response, err) {
 			return
 		}
-		formula, err := app.ApproveFormula(request.PathValue("id"),
+		formula, err := app.ApproveFormula(request.PathValue("site"), request.PathValue("id"),
 			service.VersionInput{ExpectedVersion: expected})
 		if err != nil {
 			writeDomainError(response, err)
@@ -93,12 +93,12 @@ func registerFormulaRoutes(mux *http.ServeMux, app *service.Service) {
 		writeJSON(response, http.StatusOK, formula)
 	})
 
-	mux.HandleFunc("POST /v1/formulas/{id}/retire", func(response http.ResponseWriter, request *http.Request) {
+	mux.HandleFunc("POST /v1/sites/{site}/formulas/{id}/retire", func(response http.ResponseWriter, request *http.Request) {
 		expected, err := expectedVersion(request)
 		if !handleDecode(response, err) {
 			return
 		}
-		formula, err := app.RetireFormula(request.PathValue("id"),
+		formula, err := app.RetireFormula(request.PathValue("site"), request.PathValue("id"),
 			service.VersionInput{ExpectedVersion: expected})
 		if err != nil {
 			writeDomainError(response, err)

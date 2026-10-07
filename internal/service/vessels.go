@@ -6,9 +6,13 @@ import (
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/domain"
 )
 
-func (s *Service) CreateVessel(input CreateVesselInput) (domain.Vessel, error) {
+func (s *Service) CreateVessel(
+	siteID string,
+	input CreateVesselInput,
+) (domain.Vessel, error) {
 	now := s.clock.Now()
 	vessel := domain.Vessel{
+		SiteID:    siteID,
 		Code:      domain.NormalizeVesselCode(input.Code),
 		CapacityL: input.CapacityL,
 		State:     domain.VesselAvailable,
@@ -24,14 +28,18 @@ func (s *Service) CreateVessel(input CreateVesselInput) (domain.Vessel, error) {
 		return domain.Vessel{}, domain.NewError(domain.CodeStorage, err.Error())
 	}
 	vessel.ID = id
+	codeKey := domain.ScopedIndexKey(siteID, vessel.Code)
 
 	err = s.store.Execute(func(snapshot *domain.Snapshot) error {
-		if _, exists := snapshot.VesselIndex[vessel.Code]; exists {
+		if _, err := requireWritableSite(snapshot, siteID); err != nil {
+			return err
+		}
+		if _, exists := snapshot.VesselIndex[codeKey]; exists {
 			return domain.NewError(domain.CodeVesselConflict,
-				"a vessel with the same code already exists")
+				"a vessel with the same code already exists in this site")
 		}
 		snapshot.Vessels[vessel.ID] = vessel
-		snapshot.VesselIndex[vessel.Code] = vessel.ID
+		snapshot.VesselIndex[codeKey] = vessel.ID
 		return nil
 	})
 	if err != nil {
@@ -40,11 +48,14 @@ func (s *Service) CreateVessel(input CreateVesselInput) (domain.Vessel, error) {
 	return vessel, nil
 }
 
-func (s *Service) GetVessel(id string) (domain.Vessel, error) {
+func (s *Service) GetVessel(siteID, id string) (domain.Vessel, error) {
 	var found domain.Vessel
 	err := s.store.View(func(snapshot domain.Snapshot) error {
+		if _, err := requireSite(snapshot, siteID); err != nil {
+			return err
+		}
 		vessel, ok := snapshot.Vessels[id]
-		if !ok {
+		if !ok || vessel.SiteID != siteID {
 			return domain.NewError(domain.CodeVesselNotFound, "vessel was not found")
 		}
 		found = vessel
@@ -56,11 +67,17 @@ func (s *Service) GetVessel(id string) (domain.Vessel, error) {
 	return found, nil
 }
 
-func (s *Service) ListVessels() ([]domain.Vessel, error) {
+func (s *Service) ListVessels(siteID string) ([]domain.Vessel, error) {
 	var vessels []domain.Vessel
 	err := s.store.View(func(snapshot domain.Snapshot) error {
+		if _, err := requireSite(snapshot, siteID); err != nil {
+			return err
+		}
 		vessels = make([]domain.Vessel, 0, len(snapshot.Vessels))
 		for _, vessel := range snapshot.Vessels {
+			if vessel.SiteID != siteID {
+				continue
+			}
 			vessels = append(vessels, vessel)
 		}
 		return nil
@@ -78,13 +95,17 @@ func (s *Service) ListVessels() ([]domain.Vessel, error) {
 }
 
 func (s *Service) FinishCleaning(
+	siteID string,
 	id string,
 	input FinishCleaningInput,
 ) (domain.Vessel, error) {
 	var updated domain.Vessel
 	err := s.store.Execute(func(snapshot *domain.Snapshot) error {
+		if _, err := requireWritableSite(snapshot, siteID); err != nil {
+			return err
+		}
 		vessel, ok := snapshot.Vessels[id]
-		if !ok {
+		if !ok || vessel.SiteID != siteID {
 			return domain.NewError(domain.CodeVesselNotFound, "vessel was not found")
 		}
 		if err := s.checkExpected(vessel.Version, input.ExpectedVersion); err != nil {
@@ -116,11 +137,18 @@ func (s *Service) FinishCleaning(
 	return updated, nil
 }
 
-func (s *Service) RetireVessel(id string, input VersionInput) (domain.Vessel, error) {
+func (s *Service) RetireVessel(
+	siteID string,
+	id string,
+	input VersionInput,
+) (domain.Vessel, error) {
 	var updated domain.Vessel
 	err := s.store.Execute(func(snapshot *domain.Snapshot) error {
+		if _, err := requireWritableSite(snapshot, siteID); err != nil {
+			return err
+		}
 		vessel, ok := snapshot.Vessels[id]
-		if !ok {
+		if !ok || vessel.SiteID != siteID {
 			return domain.NewError(domain.CodeVesselNotFound, "vessel was not found")
 		}
 		if err := s.checkExpected(vessel.Version, input.ExpectedVersion); err != nil {

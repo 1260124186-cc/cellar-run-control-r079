@@ -15,6 +15,7 @@ const (
 
 type FermentationRun struct {
 	ID             string               `json:"id"`
+	SiteID         string               `json:"site_id"`
 	Code           string               `json:"code"`
 	FormulaID      string               `json:"formula_id"`
 	VesselID       *string              `json:"vessel_id,omitempty"`

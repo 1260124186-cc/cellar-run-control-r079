@@ -5,6 +5,11 @@ production cellar. It keeps formula approval, vessel availability, active
 fermentation runs, gravity observations, conditioning, completion metrics, and
 vessel cleaning in one deterministic process.
 
+One deployment serves the main brewery and any number of branch cellars. Each
+site is an isolated namespace: formulas, vessels, and runs belong to exactly
+one site, names and codes are unique only within their site, and every query
+and write is scoped to the site addressed in the URL.
+
 This repository is a healthy initialization baseline. It has no intentional
 defects and no automated test suite. Tests are intentionally deferred to a
 later engineering task; the production workflow checks in this repository
@@ -65,34 +70,46 @@ Health:
 
 - `GET /healthz`
 
-Formula workflow:
+Site workflow:
 
-- `POST /v1/formulas`
-- `GET /v1/formulas`
-- `GET /v1/formulas/{id}`
-- `PUT /v1/formulas/{id}/steps`
-- `POST /v1/formulas/{id}/approve`
-- `POST /v1/formulas/{id}/retire`
+- `POST /v1/sites`
+- `GET /v1/sites`
+- `GET /v1/sites/{id}`
+- `POST /v1/sites/{id}/archive`
 
-Vessel workflow:
+Formula workflow (scoped to one site):
 
-- `POST /v1/vessels`
-- `GET /v1/vessels`
-- `GET /v1/vessels/{id}`
-- `POST /v1/vessels/{id}/finish-cleaning`
-- `POST /v1/vessels/{id}/retire`
+- `POST /v1/sites/{site}/formulas`
+- `GET /v1/sites/{site}/formulas`
+- `GET /v1/sites/{site}/formulas/{id}`
+- `PUT /v1/sites/{site}/formulas/{id}/steps`
+- `POST /v1/sites/{site}/formulas/{id}/approve`
+- `POST /v1/sites/{site}/formulas/{id}/retire`
 
-Run workflow:
+Vessel workflow (scoped to one site):
 
-- `POST /v1/runs`
-- `GET /v1/runs`
-- `GET /v1/runs/{id}`
-- `POST /v1/runs/{id}/reserve`
-- `POST /v1/runs/{id}/start`
-- `POST /v1/runs/{id}/observations`
-- `POST /v1/runs/{id}/conditioning`
-- `POST /v1/runs/{id}/complete`
-- `POST /v1/runs/{id}/abort`
+- `POST /v1/sites/{site}/vessels`
+- `GET /v1/sites/{site}/vessels`
+- `GET /v1/sites/{site}/vessels/{id}`
+- `POST /v1/sites/{site}/vessels/{id}/finish-cleaning`
+- `POST /v1/sites/{site}/vessels/{id}/retire`
+
+Run workflow (scoped to one site):
+
+- `POST /v1/sites/{site}/runs`
+- `GET /v1/sites/{site}/runs`
+- `GET /v1/sites/{site}/runs/{id}`
+- `POST /v1/sites/{site}/runs/{id}/reserve`
+- `POST /v1/sites/{site}/runs/{id}/start`
+- `POST /v1/sites/{site}/runs/{id}/observations`
+- `POST /v1/sites/{site}/runs/{id}/conditioning`
+- `POST /v1/sites/{site}/runs/{id}/complete`
+- `POST /v1/sites/{site}/runs/{id}/abort`
+
+Every formula, vessel, and run carries a `site_id`. Lists and details only
+return the addressed site's data, a run can only reference a formula or
+vessel from its own site, and an archived site rejects new writes with
+`site_archived` while remaining readable.
 
 Writes accept an optional `X-Expected-Version` header. Errors use a stable
 shape:
@@ -115,11 +132,14 @@ Run each production workflow check separately:
 go run ./cmd/fermentctl check formula-approval
 go run ./cmd/fermentctl check vessel-run-lifecycle
 go run ./cmd/fermentctl check observations-completion
+go run ./cmd/fermentctl check site-isolation
 ```
 
 Each check creates a temporary snapshot directory, starts the real HTTP
 handler on a loopback listener, issues JSON requests, verifies success and
-failure behavior, and removes its temporary data.
+failure behavior, and removes its temporary data. The site-isolation check
+additionally restarts the service against the same directory to prove that
+historical runs remain in their original sites.
 
 ## Persistence And Recovery
 
@@ -129,9 +149,13 @@ directory, commits the encoded bytes durably, closes the handle, and renames
 the result over the previous snapshot. The in-memory snapshot is replaced only
 after that operation succeeds.
 
-On startup, an existing snapshot is decoded and normalized. Unknown or
-conflicting map indexes are not silently invented; invalid JSON or a negative
-revision stops the process before HTTP serving begins.
+All sites share one snapshot document. Every formula, vessel, and run records
+its owning `site_id`, and the name and code indexes are keyed per site, so
+identical codes in different sites never collide. On startup, an existing
+snapshot is decoded and normalized: indexes must match their collections per
+site, and any reference that crosses a site boundary stops the process before
+HTTP serving begins. Snapshots written before sites existed are migrated into
+a default `MAIN` site on load.
 
 ## Repair-Ready Boundaries
 
@@ -139,6 +163,7 @@ The baseline intentionally keeps several independent behavior surfaces visible
 for later engineering evaluation:
 
 - formula name normalization and duplicate detection;
+- site-scoped uniqueness and cross-site reference rejection;
 - target gravity and process-step range validation;
 - aggregate version conflict checks;
 - atomic vessel reservation and release;

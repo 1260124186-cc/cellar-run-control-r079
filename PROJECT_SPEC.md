@@ -6,6 +6,11 @@ Cellar Run Control is a local Go HTTP service for a small production cellar.
 It coordinates approved formulas, vessel reservation, active fermentation
 runs, gravity observations, conditioning, completion, and vessel release.
 
+One deployment can serve the main brewery and several branch cellars at the
+same time. Each site is an isolated namespace: formulas, vessels, and runs
+belong to exactly one site, their names and codes are unique only within
+that site, and no query or write can cross a site boundary.
+
 The project is a healthy initialization baseline. It contains no intentional
 defects, no model traces, and no automated tests. Verification is intentionally
 deferred to a later engineering task.
@@ -22,16 +27,32 @@ deferred to a later engineering task.
 
 ## Entities
 
+### Site
+
+A site is a cellar namespace with an identifier, a unique uppercase code, a
+display name, a lifecycle state, version, and timestamps.
+
+States are `active` and `archived`.
+
+- Codes are unique across the whole service after case normalization.
+- `active -> archived` is always allowed and accepts `X-Expected-Version`.
+- An archived site rejects every write to its formulas, vessels, and runs
+  with a stable `site_archived` error, but stays fully readable.
+- Archiving is serialized with all other writes by the store mutex, so a
+  concurrent write either commits before the archive or fails after it;
+  no partial cross-site state can appear.
+
 ### Formula
 
-A formula contains an identifier, normalized name, style label, target original
-gravity, target final gravity, maximum fermentation temperature, minimum and
-maximum planned days, ordered process steps, lifecycle state, version, and
-timestamps.
+A formula contains an identifier, the owning site identifier, normalized
+name, style label, target original gravity, target final gravity, maximum
+fermentation temperature, minimum and maximum planned days, ordered process
+steps, lifecycle state, version, and timestamps.
 
 States are `draft`, `approved`, and `retired`.
 
-- Names are unique after case folding and whitespace normalization.
+- Names are unique within the owning site after case folding and whitespace
+  normalization; the same name may exist in another site.
 - Target original gravity is in the inclusive range 1.030 to 1.120.
 - Target final gravity is positive, lower than target original gravity, and
   differs from it by at least 0.005.
@@ -47,8 +68,9 @@ States are `draft`, `approved`, and `retired`.
 
 ### Vessel
 
-A vessel contains an identifier, unique display code, capacity in liters,
-lifecycle state, active run identifier, version, and timestamps.
+A vessel contains an identifier, the owning site identifier, a display code
+unique within the site, capacity in liters, lifecycle state, active run
+identifier, version, and timestamps.
 
 States are `available`, `reserved`, `in_use`, `cleaning`, and `retired`.
 
@@ -63,15 +85,20 @@ States are `available`, `reserved`, `in_use`, `cleaning`, and `retired`.
 
 ### FermentationRun
 
-A run contains an identifier, unique run code, an approved formula identifier,
-an optional vessel identifier, planned volume, notes, lifecycle state,
-timetable, ordered observations, final metrics, version, and timestamps.
+A run contains an identifier, the owning site identifier, a run code unique
+within the site, an approved formula identifier from the same site, an
+optional vessel identifier from the same site, planned volume, notes,
+lifecycle state, timetable, ordered observations, final metrics, version,
+and timestamps.
 
 States are `planned`, `reserved`, `fermenting`, `conditioning`, `completed`,
 and `aborted`.
 
 - Planned volume is greater than zero and cannot exceed vessel capacity.
 - Only an approved formula may be attached to a run.
+- A run can never reference a formula or vessel from another site; the
+  lookup is scoped to the run's site, so foreign identifiers read as
+  `formula_not_found` or `vessel_not_found`.
 - `planned -> reserved` atomically reserves an available vessel.
 - `reserved -> fermenting` requires that the vessel still belongs to the run.
 - `fermenting -> conditioning` requires at least two observations.
@@ -103,10 +130,10 @@ time, gravity, temperature, optional note, and receipt time.
 
 Public entry points are:
 
-- `POST /v1/formulas`
-- `PUT /v1/formulas/{id}/steps`
-- `POST /v1/formulas/{id}/approve`
-- `GET /v1/formulas/{id}`
+- `POST /v1/sites/{site}/formulas`
+- `PUT /v1/sites/{site}/formulas/{id}/steps`
+- `POST /v1/sites/{site}/formulas/{id}/approve`
+- `GET /v1/sites/{site}/formulas/{id}`
 
 The client creates a draft, sets its process step list atomically, approves it,
 and reads the approved record. Invalid ranges, duplicate names, empty steps,
@@ -119,11 +146,11 @@ rules, and snapshot storage.
 
 Public entry points are:
 
-- `POST /v1/vessels`
-- `POST /v1/runs`
-- `POST /v1/runs/{id}/reserve`
-- `POST /v1/runs/{id}/start`
-- `GET /v1/runs/{id}`
+- `POST /v1/sites/{site}/vessels`
+- `POST /v1/sites/{site}/runs`
+- `POST /v1/sites/{site}/runs/{id}/reserve`
+- `POST /v1/sites/{site}/runs/{id}/start`
+- `GET /v1/sites/{site}/runs/{id}`
 
 The client registers a vessel, creates a planned run against an approved
 formula, reserves the vessel, starts fermentation, and reads the run. Capacity
@@ -137,10 +164,10 @@ rules, storage coordination, and resource lifecycle.
 
 Public entry points are:
 
-- `POST /v1/runs/{id}/observations`
-- `POST /v1/runs/{id}/conditioning`
-- `POST /v1/runs/{id}/complete`
-- `GET /v1/runs/{id}`
+- `POST /v1/sites/{site}/runs/{id}/observations`
+- `POST /v1/sites/{site}/runs/{id}/conditioning`
+- `POST /v1/sites/{site}/runs/{id}/complete`
+- `GET /v1/sites/{site}/runs/{id}`
 
 The client appends three ordered observations, starts conditioning, completes
 the run, and reads the calculated result. Non-monotonic times, rising gravity,
@@ -149,6 +176,25 @@ transitions return stable failures without changing persisted state.
 
 This path crosses HTTP protocol handling, application orchestration, numeric
 domain rules, and snapshot storage.
+
+### 4. Site Isolation
+
+Public entry points are:
+
+- `POST /v1/sites`
+- `GET /v1/sites`
+- `GET /v1/sites/{id}`
+- `POST /v1/sites/{id}/archive`
+
+The client creates two sites, reuses the same formula names, vessel codes,
+and run codes in both, and confirms that lists and details only ever show the
+addressed site. Creating a run with another site's formula or reserving
+another site's vessel fails with a stable not-found error. Archiving a site
+blocks new writes atomically while historical data stays readable, and a
+service restart leaves every run in its original space.
+
+This path crosses HTTP protocol handling, application orchestration, namespace
+scoping, and snapshot persistence.
 
 ## Modules
 
@@ -174,8 +220,10 @@ The domain package does not import outer packages.
 
 ## API Behavior
 
-All business routes are JSON under `/v1`. A successful write returns the
-updated aggregate and its version. A failed write returns:
+All business routes are JSON under `/v1`. Site management lives at
+`/v1/sites`; every formula, vessel, and run route is nested under
+`/v1/sites/{site}` and only ever sees that site's data. A successful write
+returns the updated aggregate and its version. A failed write returns:
 
 ```json
 {
@@ -198,6 +246,15 @@ an in-process mutex. The complete state is encoded, committed to durable
 storage, and then atomically renamed over the target. An update is not
 published in memory unless persistence succeeds.
 
+The snapshot stores every site in one revisioned document. Each formula,
+vessel, and run carries its owning site identifier, and the uniqueness
+indexes are keyed per site, so identical names or codes in different sites
+never share an index slot. Loading validates that indexes match their
+collections per site and that no run, vessel, or formula references an
+entity outside its own site; a violation stops the process before HTTP
+serving begins. Snapshots written before sites existed are migrated on load
+into a default `MAIN` site, so a restart never strands historical runs.
+
 Reads use copied values and never expose repository-owned maps or slices. The
 default address is `127.0.0.1:8088`, the request body limit is 1 MiB, and all
 workflow checks use temporary directories.
@@ -210,13 +267,14 @@ task owns systematic tests for validation boundaries, state transitions,
 numeric calculations, stale revisions, storage failures, and concurrent
 reservation attempts.
 
-The current build command is `go build ./...`. Three bounded production checks
+The current build command is `go build ./...`. Four bounded production checks
 start the real HTTP handler, issue real JSON requests, check success and failure
 behavior, and exit without external services:
 
 - `go run ./cmd/fermentctl check formula-approval`
 - `go run ./cmd/fermentctl check vessel-run-lifecycle`
 - `go run ./cmd/fermentctl check observations-completion`
+- `go run ./cmd/fermentctl check site-isolation`
 
 ## Scope Limits
 

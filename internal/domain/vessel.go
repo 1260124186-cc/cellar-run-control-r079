@@ -14,6 +14,7 @@ const (
 
 type Vessel struct {
 	ID          string      `json:"id"`
+	SiteID      string      `json:"site_id"`
 	Code        string      `json:"code"`
 	CapacityL   float64     `json:"capacity_liters"`
 	State       VesselState `json:"state"`
