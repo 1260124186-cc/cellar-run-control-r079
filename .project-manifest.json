@@ -21,12 +21,12 @@
     {
       "id": "domain",
       "path": "internal/domain",
-      "responsibility": "entities, validation, state transitions, and metrics"
+      "responsibility": "cellar namespaces, entities, validation, state transitions, and metrics"
     },
     {
       "id": "service",
       "path": "internal/service",
-      "responsibility": "orchestrate formulas, vessels, runs, and observations"
+      "responsibility": "orchestrate cellars, formulas, vessels, runs, and observations"
     },
     {
       "id": "storage",
@@ -57,7 +57,7 @@
     {
       "id": "formula-approval",
       "name": "Create, configure, approve, and read a formula",
-      "entry": "POST /v1/formulas",
+      "entry": "POST /v1/cellars/{cellar}/formulas",
       "steps": [
         "create a draft formula with validated target values",
         "set the process step list in one operation",
@@ -77,7 +77,7 @@
     {
       "id": "vessel-run-lifecycle",
       "name": "Register a vessel and advance a reserved run to fermentation",
-      "entry": "POST /v1/vessels",
+      "entry": "POST /v1/cellars/{cellar}/vessels",
       "steps": [
         "register an available vessel",
         "create a planned run against an approved formula",
@@ -97,7 +97,7 @@
     {
       "id": "observations-completion",
       "name": "Append observations, start conditioning, and complete a run",
-      "entry": "POST /v1/runs/{id}/observations",
+      "entry": "POST /v1/cellars/{cellar}/runs/{id}/observations",
       "steps": [
         "append ordered gravity and temperature observations",
         "move the run to conditioning",
@@ -107,6 +107,27 @@
       "success": "returns computed metrics and a vessel in cleaning state",
       "failure": "returns a stable range, sequence, time, state, or count error",
       "verification": "the check issues real HTTP requests and rejects malformed observations",
+      "module_ids": [
+        "httpapi",
+        "service",
+        "domain",
+        "storage"
+      ]
+    },
+    {
+      "id": "cellar-namespaces",
+      "name": "Isolate two cellars sharing names, codes, and one deployment",
+      "entry": "POST /v1/cellars",
+      "steps": [
+        "create two cellars and reuse identical formula, vessel, and run codes",
+        "verify lists, details, and exports stay inside their own cellar",
+        "reject cross-cellar formula and vessel references on runs",
+        "race archiving against concurrent writes with exactly one winner",
+        "restart the service and confirm runs remain in their original cellar"
+      ],
+      "success": "returns isolated namespaces, a frozen archived cellar, and stable history after restart",
+      "failure": "returns a stable not-found, uniqueness, state, or in-use error without cross-space writes",
+      "verification": "the check issues real and concurrent HTTP requests, archives a cellar, and restarts over the same snapshot",
       "module_ids": [
         "httpapi",
         "service",

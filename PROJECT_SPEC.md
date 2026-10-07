@@ -6,6 +6,11 @@ Cellar Run Control is a local Go HTTP service for a small production cellar.
 It coordinates approved formulas, vessel reservation, active fermentation
 runs, gravity observations, conditioning, completion, and vessel release.
 
+One deployment serves the main plant and branch cellars concurrently. Every
+formula, vessel, and run belongs to exactly one cellar namespace: names and
+codes are unique per cellar, queries only see their own cellar, and runs
+cannot reference another cellar's formulas or vessels.
+
 The project is a healthy initialization baseline. It contains no intentional
 defects, no model traces, and no automated tests. Verification is intentionally
 deferred to a later engineering task.
@@ -22,16 +27,32 @@ deferred to a later engineering task.
 
 ## Entities
 
+### Cellar
+
+A cellar is an isolated namespace for one production site. It contains an
+identifier, normalized name, lifecycle state, version, and timestamps.
+
+States are `active` and `archived`.
+
+- Names are unique across all cellars after case folding and whitespace
+  normalization.
+- `active -> archived` is allowed only when the cellar holds no open runs and
+  no vessels still associated with a run, so archiving never strands
+  half-finished work.
+- An archived cellar remains readable but rejects every write inside its
+  namespace.
+
 ### Formula
 
-A formula contains an identifier, normalized name, style label, target original
-gravity, target final gravity, maximum fermentation temperature, minimum and
-maximum planned days, ordered process steps, lifecycle state, version, and
-timestamps.
+A formula contains an identifier, its cellar identifier, normalized name,
+style label, target original gravity, target final gravity, maximum
+fermentation temperature, minimum and maximum planned days, ordered process
+steps, lifecycle state, version, and timestamps.
 
 States are `draft`, `approved`, and `retired`.
 
-- Names are unique after case folding and whitespace normalization.
+- Names are unique within one cellar after case folding and whitespace
+  normalization; different cellars may reuse the same name.
 - Target original gravity is in the inclusive range 1.030 to 1.120.
 - Target final gravity is positive, lower than target original gravity, and
   differs from it by at least 0.005.
@@ -47,8 +68,9 @@ States are `draft`, `approved`, and `retired`.
 
 ### Vessel
 
-A vessel contains an identifier, unique display code, capacity in liters,
-lifecycle state, active run identifier, version, and timestamps.
+A vessel contains an identifier, its cellar identifier, display code unique
+within the cellar, capacity in liters, lifecycle state, active run identifier,
+version, and timestamps.
 
 States are `available`, `reserved`, `in_use`, `cleaning`, and `retired`.
 
@@ -63,9 +85,11 @@ States are `available`, `reserved`, `in_use`, `cleaning`, and `retired`.
 
 ### FermentationRun
 
-A run contains an identifier, unique run code, an approved formula identifier,
-an optional vessel identifier, planned volume, notes, lifecycle state,
-timetable, ordered observations, final metrics, version, and timestamps.
+A run contains an identifier, its cellar identifier, a run code unique within
+the cellar, an approved formula identifier from the same cellar, an optional
+vessel identifier from the same cellar, planned volume, notes, lifecycle
+state, timetable, ordered observations, final metrics, version, and
+timestamps.
 
 States are `planned`, `reserved`, `fermenting`, `conditioning`, `completed`,
 and `aborted`.
@@ -103,14 +127,16 @@ time, gravity, temperature, optional note, and receipt time.
 
 Public entry points are:
 
-- `POST /v1/formulas`
-- `PUT /v1/formulas/{id}/steps`
-- `POST /v1/formulas/{id}/approve`
-- `GET /v1/formulas/{id}`
+- `POST /v1/cellars`
+- `POST /v1/cellars/{cellar}/formulas`
+- `PUT /v1/cellars/{cellar}/formulas/{id}/steps`
+- `POST /v1/cellars/{cellar}/formulas/{id}/approve`
+- `GET /v1/cellars/{cellar}/formulas/{id}`
 
-The client creates a draft, sets its process step list atomically, approves it,
-and reads the approved record. Invalid ranges, duplicate names, empty steps,
-and repeated approval return stable error codes without partial writes.
+The client creates a cellar, creates a draft inside it, sets its process step
+list atomically, approves it, and reads the approved record. Invalid ranges,
+duplicate names, empty steps, and repeated approval return stable error codes
+without partial writes.
 
 This path crosses HTTP protocol handling, application orchestration, domain
 rules, and snapshot storage.
@@ -119,11 +145,11 @@ rules, and snapshot storage.
 
 Public entry points are:
 
-- `POST /v1/vessels`
-- `POST /v1/runs`
-- `POST /v1/runs/{id}/reserve`
-- `POST /v1/runs/{id}/start`
-- `GET /v1/runs/{id}`
+- `POST /v1/cellars/{cellar}/vessels`
+- `POST /v1/cellars/{cellar}/runs`
+- `POST /v1/cellars/{cellar}/runs/{id}/reserve`
+- `POST /v1/cellars/{cellar}/runs/{id}/start`
+- `GET /v1/cellars/{cellar}/runs/{id}`
 
 The client registers a vessel, creates a planned run against an approved
 formula, reserves the vessel, starts fermentation, and reads the run. Capacity
@@ -137,10 +163,10 @@ rules, storage coordination, and resource lifecycle.
 
 Public entry points are:
 
-- `POST /v1/runs/{id}/observations`
-- `POST /v1/runs/{id}/conditioning`
-- `POST /v1/runs/{id}/complete`
-- `GET /v1/runs/{id}`
+- `POST /v1/cellars/{cellar}/runs/{id}/observations`
+- `POST /v1/cellars/{cellar}/runs/{id}/conditioning`
+- `POST /v1/cellars/{cellar}/runs/{id}/complete`
+- `GET /v1/cellars/{cellar}/runs/{id}`
 
 The client appends three ordered observations, starts conditioning, completes
 the run, and reads the calculated result. Non-monotonic times, rising gravity,
@@ -149,6 +175,27 @@ transitions return stable failures without changing persisted state.
 
 This path crosses HTTP protocol handling, application orchestration, numeric
 domain rules, and snapshot storage.
+
+### 4. Cellar Namespaces
+
+Public entry points are:
+
+- `POST /v1/cellars`
+- `POST /v1/cellars/{id}/archive`
+- `GET /v1/cellars/{id}/export`
+- `GET /v1/cellars/{cellar}/formulas`
+- `GET /v1/cellars/{cellar}/vessels`
+- `GET /v1/cellars/{cellar}/runs`
+
+Two cellars reuse identical formula names, vessel codes, and run codes without
+conflict. Lists, details, and exports only contain the addressed cellar's
+data; cross-cellar identifiers answer `404`. A run cannot attach another
+cellar's formula or vessel. Archiving races a concurrent write with exactly
+one winner and never leaves an archived cellar holding open work, and a
+service restart keeps every historical run in its original cellar.
+
+This path crosses HTTP protocol handling, application orchestration, domain
+rules, storage coordination, concurrency, and snapshot recovery.
 
 ## Modules
 
@@ -194,13 +241,19 @@ rejects a stale write instead of overwriting newer state.
 ## Persistence And Concurrency
 
 The configured data directory contains `state.json`. Writes are serialized by
-an in-process mutex. The complete state is encoded, committed to durable
-storage, and then atomically renamed over the target. An update is not
-published in memory unless persistence succeeds.
+an in-process mutex, so cellar creation, archiving, and entity writes never
+interleave into a cross-space partial state. The complete state is encoded,
+committed to durable storage, and then atomically renamed over the target. An
+update is not published in memory unless persistence succeeds.
 
 Reads use copied values and never expose repository-owned maps or slices. The
 default address is `127.0.0.1:8088`, the request body limit is 1 MiB, and all
 workflow checks use temporary directories.
+
+Every entity persists its cellar identifier, and uniqueness indexes are keyed
+per cellar. Startup normalization rejects entities that reference an unknown
+cellar or point across cellar boundaries. Snapshots written before namespaces
+existed migrate into a deterministic `cellar_legacy` cellar.
 
 ## Validation Plan
 
@@ -210,13 +263,14 @@ task owns systematic tests for validation boundaries, state transitions,
 numeric calculations, stale revisions, storage failures, and concurrent
 reservation attempts.
 
-The current build command is `go build ./...`. Three bounded production checks
+The current build command is `go build ./...`. Four bounded production checks
 start the real HTTP handler, issue real JSON requests, check success and failure
 behavior, and exit without external services:
 
 - `go run ./cmd/fermentctl check formula-approval`
 - `go run ./cmd/fermentctl check vessel-run-lifecycle`
 - `go run ./cmd/fermentctl check observations-completion`
+- `go run ./cmd/fermentctl check cellar-namespaces`
 
 ## Scope Limits
 

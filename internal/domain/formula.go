@@ -23,6 +23,7 @@ type FormulaStep struct {
 
 type Formula struct {
 	ID                    string        `json:"id"`
+	CellarID              string        `json:"cellar_id"`
 	Name                  string        `json:"name"`
 	Style                 string        `json:"style"`
 	TargetOriginalGravity float64       `json:"target_original_gravity"`

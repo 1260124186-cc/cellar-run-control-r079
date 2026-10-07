@@ -8,15 +8,19 @@ import (
 )
 
 func observationsCompletion(api *client) error {
-	formula, err := ensureApprovedFormula(api, "Completion Formula")
+	cellar, err := ensureCellar(api, "Observations Cellar")
 	if err != nil {
 		return err
 	}
-	vessel, err := createCheckVessel(api, "VSL-202", 300)
+	formula, err := ensureApprovedFormula(api, cellar.ID, "Completion Formula")
 	if err != nil {
 		return err
 	}
-	started, err := createStartedRun(api, formula.ID, vessel.ID, "RUN-OBSERVATIONS")
+	vessel, err := createCheckVessel(api, cellar.ID, "VSL-202", 300)
+	if err != nil {
+		return err
+	}
+	started, err := createStartedRun(api, cellar.ID, formula.ID, vessel.ID, "RUN-OBSERVATIONS")
 	if err != nil {
 		return err
 	}
@@ -33,7 +37,8 @@ func observationsCompletion(api *client) error {
 	version := started.Run.Version
 	for index, point := range points {
 		sequence := index + 1
-		response, err := api.call("POST", "/v1/runs/"+started.Run.ID+"/observations",
+		response, err := api.call("POST",
+			cellarPath(cellar.ID, "/runs/"+started.Run.ID+"/observations"),
 			map[string]any{
 				"sequence":      sequence,
 				"gravity":       point.gravity,
@@ -54,7 +59,8 @@ func observationsCompletion(api *client) error {
 		version = run.Version
 	}
 
-	invalidRange, err := api.call("POST", "/v1/runs/"+started.Run.ID+"/observations",
+	invalidRange, err := api.call("POST",
+		cellarPath(cellar.ID, "/runs/"+started.Run.ID+"/observations"),
 		map[string]any{
 			"sequence":      4,
 			"gravity":       1.4,
@@ -70,7 +76,8 @@ func observationsCompletion(api *client) error {
 		return err
 	}
 
-	nonMonotonic, err := api.call("POST", "/v1/runs/"+started.Run.ID+"/observations",
+	nonMonotonic, err := api.call("POST",
+		cellarPath(cellar.ID, "/runs/"+started.Run.ID+"/observations"),
 		map[string]any{
 			"sequence":      4,
 			"gravity":       1.012,
@@ -87,7 +94,7 @@ func observationsCompletion(api *client) error {
 	}
 
 	conditioningResponse, err := api.call("POST",
-		"/v1/runs/"+started.Run.ID+"/conditioning", nil, ptrInt64(version))
+		cellarPath(cellar.ID, "/runs/"+started.Run.ID+"/conditioning"), nil, ptrInt64(version))
 	if err != nil {
 		return err
 	}
@@ -102,7 +109,8 @@ func observationsCompletion(api *client) error {
 		return err
 	}
 
-	completeResponse, err := api.call("POST", "/v1/runs/"+started.Run.ID+"/complete",
+	completeResponse, err := api.call("POST",
+		cellarPath(cellar.ID, "/runs/"+started.Run.ID+"/complete"),
 		nil, ptrInt64(conditioning.Version))
 	if err != nil {
 		return err
@@ -127,7 +135,8 @@ func observationsCompletion(api *client) error {
 		return errInvalidWorkflow("completion metrics were not calculated")
 	}
 
-	repeatResponse, err := api.call("POST", "/v1/runs/"+started.Run.ID+"/complete",
+	repeatResponse, err := api.call("POST",
+		cellarPath(cellar.ID, "/runs/"+started.Run.ID+"/complete"),
 		nil, ptrInt64(completed.Run.Version))
 	if err != nil {
 		return err
@@ -137,7 +146,8 @@ func observationsCompletion(api *client) error {
 		return err
 	}
 
-	readResponse, err := api.call("GET", "/v1/runs/"+started.Run.ID, nil, nil)
+	readResponse, err := api.call("GET",
+		cellarPath(cellar.ID, "/runs/"+started.Run.ID), nil, nil)
 	if err != nil {
 		return err
 	}
@@ -154,8 +164,13 @@ func observationsCompletion(api *client) error {
 	return nil
 }
 
-func createCheckVessel(api *client, code string, capacity float64) (vesselView, error) {
-	response, err := api.call("POST", "/v1/vessels", map[string]any{
+func createCheckVessel(
+	api *client,
+	cellarID string,
+	code string,
+	capacity float64,
+) (vesselView, error) {
+	response, err := api.call("POST", cellarPath(cellarID, "/vessels"), map[string]any{
 		"code":            code,
 		"capacity_liters": capacity,
 	}, nil)
@@ -174,11 +189,12 @@ func createCheckVessel(api *client, code string, capacity float64) (vesselView, 
 
 func createStartedRun(
 	api *client,
+	cellarID string,
 	formulaID string,
 	vesselID string,
 	code string,
 ) (pairView, error) {
-	runResponse, err := api.call("POST", "/v1/runs",
+	runResponse, err := api.call("POST", cellarPath(cellarID, "/runs"),
 		createRunPayload(code, formulaID), nil)
 	if err != nil {
 		return pairView{}, err
@@ -190,7 +206,8 @@ func createStartedRun(
 	if err := runResponse.decode(&run); err != nil {
 		return pairView{}, err
 	}
-	reserveResponse, err := api.call("POST", "/v1/runs/"+run.ID+"/reserve",
+	reserveResponse, err := api.call("POST",
+		cellarPath(cellarID, "/runs/"+run.ID+"/reserve"),
 		map[string]any{"vessel_id": vesselID}, ptrInt64(run.Version))
 	if err != nil {
 		return pairView{}, err
@@ -202,7 +219,8 @@ func createStartedRun(
 	if err := reserveResponse.decode(&reserved); err != nil {
 		return pairView{}, err
 	}
-	startResponse, err := api.call("POST", "/v1/runs/"+run.ID+"/start",
+	startResponse, err := api.call("POST",
+		cellarPath(cellarID, "/runs/"+run.ID+"/start"),
 		nil, ptrInt64(reserved.Run.Version))
 	if err != nil {
 		return pairView{}, err

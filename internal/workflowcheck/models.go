@@ -7,15 +7,24 @@ import (
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/domain"
 )
 
+type cellarView struct {
+	ID      string             `json:"id"`
+	Name    string             `json:"name"`
+	State   domain.CellarState `json:"state"`
+	Version int64              `json:"version"`
+}
+
 type formulaView struct {
-	ID      string               `json:"id"`
-	State   domain.FormulaState  `json:"state"`
-	Version int64                `json:"version"`
-	Steps   []domain.FormulaStep `json:"steps"`
+	ID       string               `json:"id"`
+	CellarID string               `json:"cellar_id"`
+	State    domain.FormulaState  `json:"state"`
+	Version  int64                `json:"version"`
+	Steps    []domain.FormulaStep `json:"steps"`
 }
 
 type vesselView struct {
 	ID          string             `json:"id"`
+	CellarID    string             `json:"cellar_id"`
 	State       domain.VesselState `json:"state"`
 	Version     int64              `json:"version"`
 	ActiveRunID *string            `json:"active_run_id"`
@@ -23,6 +32,9 @@ type vesselView struct {
 
 type runView struct {
 	ID           string                      `json:"id"`
+	CellarID     string                      `json:"cellar_id"`
+	Code         string                      `json:"code"`
+	FormulaID    string                      `json:"formula_id"`
 	State        domain.RunState             `json:"state"`
 	Version      int64                       `json:"version"`
 	VesselID     *string                     `json:"vessel_id"`
@@ -97,4 +109,27 @@ func requireVesselState(vessel vesselView, state domain.VesselState) error {
 		return fmt.Errorf("expected vessel state %q, got %q", state, vessel.State)
 	}
 	return nil
+}
+
+// cellarPath prefixes every business route with its cellar namespace.
+func cellarPath(cellarID, suffix string) string {
+	return "/v1/cellars/" + cellarID + suffix
+}
+
+func ensureCellar(api *client, name string) (cellarView, error) {
+	response, err := api.call("POST", "/v1/cellars", map[string]any{"name": name}, nil)
+	if err != nil {
+		return cellarView{}, err
+	}
+	if err := requireStatus(response, 201, "create cellar"); err != nil {
+		return cellarView{}, err
+	}
+	var cellar cellarView
+	if err := response.decode(&cellar); err != nil {
+		return cellarView{}, err
+	}
+	if cellar.State != domain.CellarActive || cellar.Version != 1 {
+		return cellarView{}, errInvalidWorkflow("created cellar has unexpected state or version")
+	}
+	return cellar, nil
 }

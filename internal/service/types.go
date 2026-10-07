@@ -6,6 +6,17 @@ import (
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/domain"
 )
 
+type CreateCellarInput struct {
+	Name string
+}
+
+type CellarExport struct {
+	Cellar   domain.Cellar
+	Formulas []domain.Formula
+	Vessels  []domain.Vessel
+	Runs     []domain.FermentationRun
+}
+
 type CreateFormulaInput struct {
 	Name                  string
 	Style                 string

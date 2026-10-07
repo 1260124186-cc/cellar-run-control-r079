@@ -11,6 +11,44 @@ import (
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/storage"
 )
 
+// harness owns the check server and its data directory so a check can
+// restart the service against the same snapshot and verify persistence.
+type harness struct {
+	dataDir string
+	server  *httptest.Server
+	api     *client
+}
+
+func newHarness(dataDir string) (*harness, error) {
+	h := &harness{dataDir: dataDir}
+	if err := h.restart(); err != nil {
+		return nil, err
+	}
+	return h, nil
+}
+
+// restart closes the current server and reopens the store from the same
+// directory, simulating a full service restart over persisted state.
+func (h *harness) restart() error {
+	if h.server != nil {
+		h.server.Close()
+	}
+	store, err := storage.Open(h.dataDir)
+	if err != nil {
+		return err
+	}
+	app := service.New(store, clock.System{})
+	h.server = httptest.NewServer(httpapi.NewHandler(app))
+	h.api = newClient(h.server.URL)
+	return nil
+}
+
+func (h *harness) close() {
+	if h.server != nil {
+		h.server.Close()
+	}
+}
+
 func Run(name string) error {
 	dataDir, err := os.MkdirTemp("", "cellar-run-check-*")
 	if err != nil {
@@ -18,26 +56,27 @@ func Run(name string) error {
 	}
 	defer os.RemoveAll(dataDir)
 
-	store, err := storage.Open(dataDir)
+	h, err := newHarness(dataDir)
 	if err != nil {
 		return err
 	}
-	app := service.New(store, clock.System{})
-	server := httptest.NewServer(httpapi.NewHandler(app))
-	defer server.Close()
-	api := newClient(server.URL)
+	defer h.close()
 
 	switch name {
 	case "formula-approval":
-		if err := formulaApproval(api); err != nil {
+		if err := formulaApproval(h.api); err != nil {
 			return err
 		}
 	case "vessel-run-lifecycle":
-		if err := vesselRunLifecycle(api); err != nil {
+		if err := vesselRunLifecycle(h.api); err != nil {
 			return err
 		}
 	case "observations-completion":
-		if err := observationsCompletion(api); err != nil {
+		if err := observationsCompletion(h.api); err != nil {
+			return err
+		}
+	case "cellar-namespaces":
+		if err := cellarNamespaces(h); err != nil {
 			return err
 		}
 	default:

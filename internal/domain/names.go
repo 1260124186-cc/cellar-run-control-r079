@@ -28,6 +28,12 @@ func NormalizeName(value string) string {
 	return strings.Join(fields, " ")
 }
 
+// ScopedIndexKey builds a uniqueness index key that is local to one cellar,
+// so identical names or codes in different cellars never collide.
+func ScopedIndexKey(cellarID, key string) string {
+	return cellarID + "\x1f" + key
+}
+
 func NameKey(value string) string {
 	var builder strings.Builder
 	for _, r := range NormalizeName(value) {

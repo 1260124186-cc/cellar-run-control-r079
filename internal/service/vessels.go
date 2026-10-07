@@ -6,9 +6,13 @@ import (
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/domain"
 )
 
-func (s *Service) CreateVessel(input CreateVesselInput) (domain.Vessel, error) {
+func (s *Service) CreateVessel(
+	cellarID string,
+	input CreateVesselInput,
+) (domain.Vessel, error) {
 	now := s.clock.Now()
 	vessel := domain.Vessel{
+		CellarID:  cellarID,
 		Code:      domain.NormalizeVesselCode(input.Code),
 		CapacityL: input.CapacityL,
 		State:     domain.VesselAvailable,
@@ -24,14 +28,18 @@ func (s *Service) CreateVessel(input CreateVesselInput) (domain.Vessel, error) {
 		return domain.Vessel{}, domain.NewError(domain.CodeStorage, err.Error())
 	}
 	vessel.ID = id
+	codeKey := domain.ScopedIndexKey(cellarID, vessel.Code)
 
 	err = s.store.Execute(func(snapshot *domain.Snapshot) error {
-		if _, exists := snapshot.VesselIndex[vessel.Code]; exists {
+		if _, err := writableCellar(snapshot, cellarID); err != nil {
+			return err
+		}
+		if _, exists := snapshot.VesselIndex[codeKey]; exists {
 			return domain.NewError(domain.CodeVesselConflict,
-				"a vessel with the same code already exists")
+				"a vessel with the same code already exists in this cellar")
 		}
 		snapshot.Vessels[vessel.ID] = vessel
-		snapshot.VesselIndex[vessel.Code] = vessel.ID
+		snapshot.VesselIndex[codeKey] = vessel.ID
 		return nil
 	})
 	if err != nil {
@@ -40,12 +48,15 @@ func (s *Service) CreateVessel(input CreateVesselInput) (domain.Vessel, error) {
 	return vessel, nil
 }
 
-func (s *Service) GetVessel(id string) (domain.Vessel, error) {
+func (s *Service) GetVessel(cellarID, id string) (domain.Vessel, error) {
 	var found domain.Vessel
 	err := s.store.View(func(snapshot domain.Snapshot) error {
-		vessel, ok := snapshot.Vessels[id]
-		if !ok {
-			return domain.NewError(domain.CodeVesselNotFound, "vessel was not found")
+		if _, err := snapshotCellar(&snapshot, cellarID); err != nil {
+			return err
+		}
+		vessel, err := cellarVessel(&snapshot, cellarID, id)
+		if err != nil {
+			return err
 		}
 		found = vessel
 		return nil
@@ -56,12 +67,17 @@ func (s *Service) GetVessel(id string) (domain.Vessel, error) {
 	return found, nil
 }
 
-func (s *Service) ListVessels() ([]domain.Vessel, error) {
+func (s *Service) ListVessels(cellarID string) ([]domain.Vessel, error) {
 	var vessels []domain.Vessel
 	err := s.store.View(func(snapshot domain.Snapshot) error {
+		if _, err := snapshotCellar(&snapshot, cellarID); err != nil {
+			return err
+		}
 		vessels = make([]domain.Vessel, 0, len(snapshot.Vessels))
 		for _, vessel := range snapshot.Vessels {
-			vessels = append(vessels, vessel)
+			if vessel.CellarID == cellarID {
+				vessels = append(vessels, vessel)
+			}
 		}
 		return nil
 	})
@@ -78,14 +94,18 @@ func (s *Service) ListVessels() ([]domain.Vessel, error) {
 }
 
 func (s *Service) FinishCleaning(
+	cellarID string,
 	id string,
 	input FinishCleaningInput,
 ) (domain.Vessel, error) {
 	var updated domain.Vessel
 	err := s.store.Execute(func(snapshot *domain.Snapshot) error {
-		vessel, ok := snapshot.Vessels[id]
-		if !ok {
-			return domain.NewError(domain.CodeVesselNotFound, "vessel was not found")
+		if _, err := writableCellar(snapshot, cellarID); err != nil {
+			return err
+		}
+		vessel, err := cellarVessel(snapshot, cellarID, id)
+		if err != nil {
+			return err
 		}
 		if err := s.checkExpected(vessel.Version, input.ExpectedVersion); err != nil {
 			return err
@@ -95,7 +115,7 @@ func (s *Service) FinishCleaning(
 				"cleaning vessel has no associated run")
 		}
 		run, ok := snapshot.Runs[*vessel.ActiveRunID]
-		if !ok {
+		if !ok || run.CellarID != cellarID {
 			return domain.NewError(domain.CodeRunNotFound,
 				"associated run was not found")
 		}
@@ -116,12 +136,19 @@ func (s *Service) FinishCleaning(
 	return updated, nil
 }
 
-func (s *Service) RetireVessel(id string, input VersionInput) (domain.Vessel, error) {
+func (s *Service) RetireVessel(
+	cellarID string,
+	id string,
+	input VersionInput,
+) (domain.Vessel, error) {
 	var updated domain.Vessel
 	err := s.store.Execute(func(snapshot *domain.Snapshot) error {
-		vessel, ok := snapshot.Vessels[id]
-		if !ok {
-			return domain.NewError(domain.CodeVesselNotFound, "vessel was not found")
+		if _, err := writableCellar(snapshot, cellarID); err != nil {
+			return err
+		}
+		vessel, err := cellarVessel(snapshot, cellarID, id)
+		if err != nil {
+			return err
 		}
 		if err := s.checkExpected(vessel.Version, input.ExpectedVersion); err != nil {
 			return err
@@ -137,4 +164,19 @@ func (s *Service) RetireVessel(id string, input VersionInput) (domain.Vessel, er
 		return domain.Vessel{}, err
 	}
 	return updated, nil
+}
+
+// cellarVessel resolves a vessel strictly inside one cellar; a vessel from
+// another cellar is reported as not found so namespaces never leak.
+func cellarVessel(
+	snapshot *domain.Snapshot,
+	cellarID string,
+	id string,
+) (domain.Vessel, error) {
+	vessel, ok := snapshot.Vessels[id]
+	if !ok || vessel.CellarID != cellarID {
+		return domain.Vessel{}, domain.NewError(domain.CodeVesselNotFound,
+			"vessel was not found")
+	}
+	return vessel, nil
 }

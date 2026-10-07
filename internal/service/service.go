@@ -32,6 +32,31 @@ func (s *Service) checkExpected(current int64, expected *int64) error {
 	return nil
 }
 
+// snapshotCellar resolves a cellar for read-only access; archived cellars
+// remain readable so their history stays visible.
+func snapshotCellar(snapshot *domain.Snapshot, cellarID string) (domain.Cellar, error) {
+	cellar, ok := snapshot.Cellars[cellarID]
+	if !ok {
+		return domain.Cellar{}, domain.NewError(domain.CodeCellarNotFound,
+			"cellar was not found")
+	}
+	return cellar, nil
+}
+
+// writableCellar resolves a cellar for a mutation; an archived cellar is
+// frozen history and rejects every write inside its namespace.
+func writableCellar(snapshot *domain.Snapshot, cellarID string) (domain.Cellar, error) {
+	cellar, err := snapshotCellar(snapshot, cellarID)
+	if err != nil {
+		return domain.Cellar{}, err
+	}
+	if cellar.State != domain.CellarActive {
+		return domain.Cellar{}, domain.NewError(domain.CodeCellarState,
+			"cellar is archived and no longer accepts writes")
+	}
+	return cellar, nil
+}
+
 func generateEntityID(prefix string) (string, error) {
 	return domain.NewID(prefix)
 }

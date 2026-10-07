@@ -7,7 +7,11 @@ import (
 )
 
 func formulaApproval(api *client) error {
-	createdResponse, err := api.call("POST", "/v1/formulas",
+	cellar, err := ensureCellar(api, "Formula Approval Cellar")
+	if err != nil {
+		return err
+	}
+	createdResponse, err := api.call("POST", cellarPath(cellar.ID, "/formulas"),
 		createFormulaPayload("Current Pale"), nil)
 	if err != nil {
 		return err
@@ -22,8 +26,12 @@ func formulaApproval(api *client) error {
 	if formula.State != domain.FormulaDraft || formula.Version != 1 {
 		return fmt.Errorf("created formula has unexpected state or version")
 	}
+	if formula.CellarID != cellar.ID {
+		return fmt.Errorf("created formula landed in the wrong cellar")
+	}
 
-	premature, err := api.call("POST", "/v1/formulas/"+formula.ID+"/approve", nil, ptrInt64(1))
+	premature, err := api.call("POST",
+		cellarPath(cellar.ID, "/formulas/"+formula.ID+"/approve"), nil, ptrInt64(1))
 	if err != nil {
 		return err
 	}
@@ -32,7 +40,8 @@ func formulaApproval(api *client) error {
 		return err
 	}
 
-	updatedResponse, err := api.call("PUT", "/v1/formulas/"+formula.ID+"/steps",
+	updatedResponse, err := api.call("PUT",
+		cellarPath(cellar.ID, "/formulas/"+formula.ID+"/steps"),
 		formulaStepPayload(), ptrInt64(1))
 	if err != nil {
 		return err
@@ -47,7 +56,7 @@ func formulaApproval(api *client) error {
 		return fmt.Errorf("formula steps were not accepted as one revision")
 	}
 
-	duplicate, err := api.call("POST", "/v1/formulas",
+	duplicate, err := api.call("POST", cellarPath(cellar.ID, "/formulas"),
 		createFormulaPayload("  current   pale  "), nil)
 	if err != nil {
 		return err
@@ -57,7 +66,8 @@ func formulaApproval(api *client) error {
 		return err
 	}
 
-	approvedResponse, err := api.call("POST", "/v1/formulas/"+formula.ID+"/approve", nil, ptrInt64(2))
+	approvedResponse, err := api.call("POST",
+		cellarPath(cellar.ID, "/formulas/"+formula.ID+"/approve"), nil, ptrInt64(2))
 	if err != nil {
 		return err
 	}
@@ -71,7 +81,8 @@ func formulaApproval(api *client) error {
 		return fmt.Errorf("approved formula has unexpected state or version")
 	}
 
-	readResponse, err := api.call("GET", "/v1/formulas/"+formula.ID, nil, nil)
+	readResponse, err := api.call("GET",
+		cellarPath(cellar.ID, "/formulas/"+formula.ID), nil, nil)
 	if err != nil {
 		return err
 	}
@@ -86,7 +97,8 @@ func formulaApproval(api *client) error {
 		return fmt.Errorf("approved formula was not readable")
 	}
 
-	repeated, err := api.call("POST", "/v1/formulas/"+formula.ID+"/approve", nil, ptrInt64(3))
+	repeated, err := api.call("POST",
+		cellarPath(cellar.ID, "/formulas/"+formula.ID+"/approve"), nil, ptrInt64(3))
 	if err != nil {
 		return err
 	}
@@ -97,8 +109,9 @@ func formulaApproval(api *client) error {
 	return nil
 }
 
-func ensureApprovedFormula(api *client, name string) (formulaView, error) {
-	createdResponse, err := api.call("POST", "/v1/formulas", createFormulaPayload(name), nil)
+func ensureApprovedFormula(api *client, cellarID, name string) (formulaView, error) {
+	createdResponse, err := api.call("POST", cellarPath(cellarID, "/formulas"),
+		createFormulaPayload(name), nil)
 	if err != nil {
 		return formulaView{}, err
 	}
@@ -109,7 +122,7 @@ func ensureApprovedFormula(api *client, name string) (formulaView, error) {
 	if err := createdResponse.decode(&formula); err != nil {
 		return formulaView{}, err
 	}
-	stepsResponse, err := api.call("PUT", "/v1/formulas/"+formula.ID+"/steps",
+	stepsResponse, err := api.call("PUT", cellarPath(cellarID, "/formulas/"+formula.ID+"/steps"),
 		formulaStepPayload(), ptrInt64(1))
 	if err != nil {
 		return formulaView{}, err
@@ -117,8 +130,8 @@ func ensureApprovedFormula(api *client, name string) (formulaView, error) {
 	if err := requireStatus(stepsResponse, 200, "set setup steps"); err != nil {
 		return formulaView{}, err
 	}
-	approveResponse, err := api.call("POST", "/v1/formulas/"+formula.ID+"/approve",
-		nil, ptrInt64(2))
+	approveResponse, err := api.call("POST",
+		cellarPath(cellarID, "/formulas/"+formula.ID+"/approve"), nil, ptrInt64(2))
 	if err != nil {
 		return formulaView{}, err
 	}

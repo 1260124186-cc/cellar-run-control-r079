@@ -9,6 +9,10 @@ type Code string
 
 const (
 	CodeInvalidInput        Code = "invalid_input"
+	CodeCellarNotFound      Code = "cellar_not_found"
+	CodeCellarNameConflict  Code = "cellar_name_conflict"
+	CodeCellarState         Code = "invalid_cellar_state"
+	CodeCellarInUse         Code = "cellar_in_use"
 	CodeFormulaNotFound     Code = "formula_not_found"
 	CodeFormulaNameConflict Code = "formula_name_conflict"
 	CodeFormulaState        Code = "invalid_formula_state"

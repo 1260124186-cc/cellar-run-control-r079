@@ -1,9 +1,14 @@
 # Cellar Run Control
 
-Cellar Run Control is a local Go HTTP service for coordinating a small
-production cellar. It keeps formula approval, vessel availability, active
-fermentation runs, gravity observations, conditioning, completion metrics, and
-vessel cleaning in one deterministic process.
+Cellar Run Control is a local Go HTTP service for coordinating production
+cellars. It keeps formula approval, vessel availability, active fermentation
+runs, gravity observations, conditioning, completion metrics, and vessel
+cleaning in one deterministic process.
+
+One deployment can serve the main plant and branch cellars at the same time.
+Every formula, vessel, and run belongs to exactly one cellar namespace, so
+sites may reuse the same recipe names, vessel codes, and run codes without
+colliding or leaking into each other's queries.
 
 This repository is a healthy initialization baseline. It has no intentional
 defects and no automated test suite. Tests are intentionally deferred to a
@@ -65,34 +70,45 @@ Health:
 
 - `GET /healthz`
 
+Cellar namespaces:
+
+- `POST /v1/cellars`
+- `GET /v1/cellars`
+- `GET /v1/cellars/{id}`
+- `POST /v1/cellars/{id}/archive`
+- `GET /v1/cellars/{id}/export`
+
+All formula, vessel, and run routes are scoped to one cellar. Replace
+`{cellar}` with the cellar identifier returned by `POST /v1/cellars`.
+
 Formula workflow:
 
-- `POST /v1/formulas`
-- `GET /v1/formulas`
-- `GET /v1/formulas/{id}`
-- `PUT /v1/formulas/{id}/steps`
-- `POST /v1/formulas/{id}/approve`
-- `POST /v1/formulas/{id}/retire`
+- `POST /v1/cellars/{cellar}/formulas`
+- `GET /v1/cellars/{cellar}/formulas`
+- `GET /v1/cellars/{cellar}/formulas/{id}`
+- `PUT /v1/cellars/{cellar}/formulas/{id}/steps`
+- `POST /v1/cellars/{cellar}/formulas/{id}/approve`
+- `POST /v1/cellars/{cellar}/formulas/{id}/retire`
 
 Vessel workflow:
 
-- `POST /v1/vessels`
-- `GET /v1/vessels`
-- `GET /v1/vessels/{id}`
-- `POST /v1/vessels/{id}/finish-cleaning`
-- `POST /v1/vessels/{id}/retire`
+- `POST /v1/cellars/{cellar}/vessels`
+- `GET /v1/cellars/{cellar}/vessels`
+- `GET /v1/cellars/{cellar}/vessels/{id}`
+- `POST /v1/cellars/{cellar}/vessels/{id}/finish-cleaning`
+- `POST /v1/cellars/{cellar}/vessels/{id}/retire`
 
 Run workflow:
 
-- `POST /v1/runs`
-- `GET /v1/runs`
-- `GET /v1/runs/{id}`
-- `POST /v1/runs/{id}/reserve`
-- `POST /v1/runs/{id}/start`
-- `POST /v1/runs/{id}/observations`
-- `POST /v1/runs/{id}/conditioning`
-- `POST /v1/runs/{id}/complete`
-- `POST /v1/runs/{id}/abort`
+- `POST /v1/cellars/{cellar}/runs`
+- `GET /v1/cellars/{cellar}/runs`
+- `GET /v1/cellars/{cellar}/runs/{id}`
+- `POST /v1/cellars/{cellar}/runs/{id}/reserve`
+- `POST /v1/cellars/{cellar}/runs/{id}/start`
+- `POST /v1/cellars/{cellar}/runs/{id}/observations`
+- `POST /v1/cellars/{cellar}/runs/{id}/conditioning`
+- `POST /v1/cellars/{cellar}/runs/{id}/complete`
+- `POST /v1/cellars/{cellar}/runs/{id}/abort`
 
 Writes accept an optional `X-Expected-Version` header. Errors use a stable
 shape:
@@ -107,6 +123,24 @@ shape:
 }
 ```
 
+## Cellar Namespaces
+
+A cellar is an isolated namespace for one production site:
+
+- Formula names, vessel codes, and run codes are unique within a cellar and
+  may repeat across cellars.
+- Every list, detail, and export response only contains the addressed
+  cellar's data; an identifier from another cellar answers `404` with the
+  usual `*_not_found` code.
+- A run can only reference a formula or vessel from its own cellar.
+- Archiving a cellar requires that it holds no open runs and no vessels still
+  bound to a run, so a frozen namespace never contains half-finished work.
+  An archived cellar stays readable but rejects every write with
+  `invalid_cellar_state`.
+- Cellar creation and archiving are serialized with all other writes through
+  the same snapshot mutex, so a concurrent archive and write produce exactly
+  one winner and never a cross-space partial state.
+
 ## Workflow Checks
 
 Run each production workflow check separately:
@@ -115,11 +149,14 @@ Run each production workflow check separately:
 go run ./cmd/fermentctl check formula-approval
 go run ./cmd/fermentctl check vessel-run-lifecycle
 go run ./cmd/fermentctl check observations-completion
+go run ./cmd/fermentctl check cellar-namespaces
 ```
 
 Each check creates a temporary snapshot directory, starts the real HTTP
 handler on a loopback listener, issues JSON requests, verifies success and
-failure behavior, and removes its temporary data.
+failure behavior, and removes its temporary data. The namespace check also
+races concurrent writes against archiving and restarts the service over the
+same snapshot to prove runs stay in their original cellar.
 
 ## Persistence And Recovery
 
@@ -131,7 +168,12 @@ after that operation succeeds.
 
 On startup, an existing snapshot is decoded and normalized. Unknown or
 conflicting map indexes are not silently invented; invalid JSON or a negative
-revision stops the process before HTTP serving begins.
+revision stops the process before HTTP serving begins. Every entity carries
+its cellar identifier, and startup rejects any formula, vessel, or run that
+references an unknown cellar or points across cellar boundaries, so a corrupt
+or hand-edited file can never merge namespaces. Snapshots written before
+cellar namespaces existed are migrated into a deterministic `cellar_legacy`
+cellar, keeping historical runs reachable under their original identifiers.
 
 ## Repair-Ready Boundaries
 
@@ -139,6 +181,7 @@ The baseline intentionally keeps several independent behavior surfaces visible
 for later engineering evaluation:
 
 - formula name normalization and duplicate detection;
+- cellar namespace isolation, uniqueness, and archive guards;
 - target gravity and process-step range validation;
 - aggregate version conflict checks;
 - atomic vessel reservation and release;
